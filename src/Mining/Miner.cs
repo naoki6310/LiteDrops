@@ -123,7 +123,8 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
                     (string)n!["broadcaster"]!["id"]!,
                     (string)n["broadcaster"]!["login"]!,
                     (string?)n["broadcaster"]!["displayName"] ?? (string)n["broadcaster"]!["login"]!,
-                    (int?)n["viewersCount"] ?? 0))
+                    (int?)n["viewersCount"] ?? 0,
+                    (string?)n["id"] ?? ""))
                 .ToList();
             if (channels.Count > 0) liveGameIds.Add(gameId);
             foreach (var batch in channels.Chunk(20))
@@ -339,7 +340,7 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
         Log.Info($"Watching {channel.Login} for {campaign.GameName} / {campaign.Name} / {drop.Name}");
         PublishWatching(campaign, channel, drop);
 
-        var watcher = new StreamWatcher(api, channel.Login);
+        var watcher = new StreamWatcher(api, channel, campaign, user.Id);
         var started = DateTime.UtcNow;
         var lastProgressAt = started;
         var nextCheck = started + ProgressCheckInterval;
@@ -445,12 +446,17 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
 
 /// <summary>
 /// Simulates a viewer by periodically fetching the stream's lowest quality playlist and
-/// sending HEAD requests for its new segments, without downloading any video data.
+/// sending HEAD requests for its new segments, without downloading any video data. Like the
+/// web player, it also reports a "minute-watched" event once a minute while the stream plays.
 /// </summary>
-sealed class StreamWatcher(TwitchApi api, string login)
+sealed class StreamWatcher(TwitchApi api, ChannelRef channel, Campaign campaign, string userId)
 {
+    static readonly TimeSpan MinuteWatchedInterval = TimeSpan.FromMinutes(1);
+
     Uri? _playlist;
     readonly Queue<string> _seen = new();
+    DateTime _nextMinuteWatched = DateTime.UtcNow + MinuteWatchedInterval;
+    bool _trackFailing;
 
     public async Task<bool> TickAsync(CancellationToken ct)
     {
@@ -484,6 +490,11 @@ sealed class StreamWatcher(TwitchApi api, string login)
                 _seen.Enqueue(segment);
                 if (_seen.Count > 30) _seen.Dequeue();
             }
+            if (DateTime.UtcNow >= _nextMinuteWatched)
+            {
+                _nextMinuteWatched = DateTime.UtcNow + MinuteWatchedInterval;
+                await SendMinuteWatchedAsync(ct);
+            }
             return true;
         }
         catch (HttpRequestException)
@@ -498,12 +509,43 @@ sealed class StreamWatcher(TwitchApi api, string login)
         }
     }
 
+    /// <summary>Failures are only logged: the segment requests alone still earn progress.</summary>
+    async Task SendMinuteWatchedAsync(CancellationToken ct)
+    {
+        bool ok;
+        try
+        {
+            ok = await api.TrackAsync("minute-watched", MinuteWatchedProperties(), ct);
+        }
+        catch (HttpRequestException) { ok = false; }
+        catch (TaskCanceledException) when (!ct.IsCancellationRequested) { ok = false; }
+        if (!ok && !_trackFailing) Log.Warn($"Twitch did not accept the minute-watched event for {channel.Login}");
+        _trackFailing = !ok;
+    }
+
+    // the fields the web player sends; "site" matches the player type of the playback token
+    JsonObject MinuteWatchedProperties() => new()
+    {
+        ["broadcast_id"] = channel.StreamId,
+        ["channel_id"] = channel.Id,
+        ["channel"] = channel.Login,
+        ["game"] = campaign.GameName,
+        ["game_id"] = campaign.GameId,
+        ["hidden"] = false,
+        ["live"] = true,
+        ["location"] = "channel",
+        ["logged_in"] = true,
+        ["muted"] = false,
+        ["player"] = "site",
+        ["user_id"] = userId,
+    };
+
     async Task<Uri?> GetPlaylistAsync(CancellationToken ct)
     {
-        var result = await api.GqlAsync(Gql.PlaybackAccessToken(login), ct);
+        var result = await api.GqlAsync(Gql.PlaybackAccessToken(channel.Login), ct);
         var token = result["data"]?["streamPlaybackAccessToken"];
         if (token is null) return null;
-        var url = $"https://usher.ttvnw.net/api/channel/hls/{Uri.EscapeDataString(login)}.m3u8" +
+        var url = $"https://usher.ttvnw.net/api/channel/hls/{Uri.EscapeDataString(channel.Login)}.m3u8" +
                   $"?sig={Uri.EscapeDataString((string)token["signature"]!)}" +
                   $"&token={Uri.EscapeDataString((string)token["value"]!)}" +
                   $"&allow_source=true&p={Random.Shared.Next(1_000_000, 9_999_999)}";

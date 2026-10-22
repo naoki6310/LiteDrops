@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json.Nodes;
 
 namespace LiteDrops.Twitch;
@@ -21,10 +22,12 @@ public sealed class TwitchApi : IDisposable
 {
     public const string ClientId = "ue6666qo983tsx6so1t0vnawi233wa";
     const string ClientUrl = "https://android.tv.twitch.tv";
+    // current Chrome no longer runs on Android 7-9, so the Android version has to keep up with it
     const string UserAgent =
-        "Mozilla/5.0 (Linux; Android 7.1; Smart Box C1) AppleWebKit/537.36 " +
+        "Mozilla/5.0 (Linux; Android 12; Smart Box C1) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
     static readonly Uri GqlUri = new("https://gql.twitch.tv/gql");
+    static readonly Uri SpadeUri = new("https://spade.twitch.tv/track");
     static readonly TimeSpan MinGqlSpacing = TimeSpan.FromMilliseconds(250);
 
     readonly HttpClient _http;
@@ -162,6 +165,26 @@ public sealed class TwitchApi : IDisposable
             if (attempt >= 4) throw new TwitchApiException($"GQL request failed: {problem}");
             await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt + 1)), ct);
         }
+    }
+
+    // ---------------------------------------------------------------- analytics
+
+    /// <summary>Sends an analytics event the way the web player does; returns whether Twitch took it.</summary>
+    public async Task<bool> TrackAsync(string eventName, JsonObject properties, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, SpadeUri)
+        {
+            Content = new FormUrlEncodedContent([new("data", EncodeEvent(eventName, properties))]),
+        };
+        using var resp = await _http.SendAsync(req, ct);
+        return resp.IsSuccessStatusCode;
+    }
+
+    /// <summary>Spade takes a base64 encoded JSON array of events.</summary>
+    internal static string EncodeEvent(string eventName, JsonObject properties)
+    {
+        var events = new JsonArray(new JsonObject { ["event"] = eventName, ["properties"] = properties.DeepClone() });
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(events.ToJsonString()));
     }
 
     /// <summary>Game names as Twitch spells them, for the "Add game" suggestions.</summary>

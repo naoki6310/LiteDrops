@@ -28,6 +28,14 @@ public class HelperTests
         Assert.Equal("PUBG: BATTLEGROUNDS", record!.Game);
     }
 
+    [Fact]
+    public void Spade_events_are_a_base64_json_array()
+    {
+        var data = Twitch.TwitchApi.EncodeEvent("minute-watched", new() { ["channel_id"] = "12826", ["live"] = true });
+        var json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(data));
+        Assert.Equal("""[{"event":"minute-watched","properties":{"channel_id":"12826","live":true}}]""", json);
+    }
+
     [Theory]
     [InlineData("2026-10-16 21:31:11 INFO  Found 3 campaign(s), 1 earnable")]
     [InlineData("2026-10-16 21:31:11 WARN  Claim failed for Esports Pack: no status")]
