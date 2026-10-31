@@ -92,24 +92,16 @@ Download one of these from [Releases](../../releases).
 Both contain the same app and behave the same, and their memory use is about the same.
 
 ### Usage
-1. Put the downloaded `LiteDrops.exe` in any folder and run it
-2. Click **Log in with Twitch**. The Twitch activation page opens in your browser; enter the shown code and allow it
-3. Type a game name in the search box and pick one of the suggestions to add it
-4. LiteDrops automatically looks for campaigns of the checked games and starts watching
+1. Put `LiteDrops.exe` in any folder and run it
+2. Click **Log in with Twitch**, log in in the browser that opens, then paste the address it ends up on (it contains `#access_token=`) into LiteDrops
+3. Add games with the search box (pick a suggestion), then leave it running
 
-- Games higher in the list have priority. Drag a row to reorder it, × to remove it
-- Keyboard: Alt+↑/↓ to move, Delete to remove, Space to toggle on/off
-- Click the name of the channel being watched to open that stream in your browser
-- The ⚙ button at the top right opens the settings (start with Windows, close to tray, mine badges & emotes, language)
-- Closing the window keeps LiteDrops in the tray. To quit, right-click the tray icon and choose **Exit**
-- Settings (`litedrops.json`), claim history (`litedrops-history.json`) and the log (`litedrops.log`) are created in the same folder as the exe (each copy has its own)
-- To mine with several accounts, copy `LiteDrops.exe` into a separate folder for each account and log in to each one with a different account. Only one exe per folder can run at a time. "Start with Windows" can also be set per copy
+Drag rows to change the priority (top = first). Keyboard: Alt+↑/↓ to move, Delete to remove, Space to toggle. Click the channel name to open the stream. The ⚙ button opens the settings (start with Windows, close to tray, badges & emotes, language). Closing the window keeps LiteDrops in the tray; use **Exit** from the tray menu to quit.
 
 ### Notes
-- Campaigns are found by looking for live channels with Drops enabled. Campaigns with no streamer live can't be found
-- To receive rewards, link your game accounts to Twitch beforehand
-- Not affiliated with Twitch. Automated viewing may violate Twitch's Terms of Service. **Use at your own risk**
-- Don't log the same Twitch account into more than one copy; they would compete for the same drop progress
+- Campaigns are discovered through your Twitch drops page and through live, drops-enabled channels of your games
+- Link your game accounts on Twitch beforehand, or the rewards can't be claimed
+- Not affiliated with Twitch. Automated viewing may be against Twitch's Terms of Service — use at your own risk
 
 ---
 

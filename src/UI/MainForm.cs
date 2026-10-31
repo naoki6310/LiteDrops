@@ -30,12 +30,7 @@ sealed class MainForm : Form
     // login
     readonly Panel _loginView = new() { BackColor = Theme.Card, Visible = false };
     readonly Label _loginText = MakeLabel(Theme.Body, Theme.SubText);
-    readonly TextBox _loginCode = new()
-    {
-        ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Theme.Card, ForeColor = Theme.Text,
-        Font = Theme.Code, TabStop = false,
-    };
-    readonly AccentButton _copyButton = new() { Size = new Size(96, 34), Visible = false };
+    readonly SearchBox _loginUrl = new() { Height = 38, Visible = false };
     readonly AccentButton _loginButton = new() { Size = new Size(190, 36) };
     // games
     readonly CardPanel _gamesCard = new() { Dock = DockStyle.Fill };
@@ -73,7 +68,7 @@ sealed class MainForm : Form
 
     Miner? _miner;
     CancellationTokenSource? _minerCts;
-    CancellationTokenSource? _loginCts;
+    bool _loggingIn;
     bool _exiting;
     bool _started;
     DateTime _lastTrim;
@@ -188,22 +183,17 @@ sealed class MainForm : Form
             _channel.MaximumSize = new Size(w, _channel.Height);
         };
 
-        _loginText.SetBounds(0, 0, 410, 44);
+        _loginText.SetBounds(0, 0, 410, 62);
         _loginText.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         _loginText.Text = L.LoginPrompt;
-        _loginCode.SetBounds(0, 50, 190, 40);
-        _copyButton.Text = L.Copy;
-        _copyButton.Location = new Point(200, 52);
-        _copyButton.Click += (_, _) =>
-        {
-            if (_loginCode.Text.Length == 0) return;
-            Clipboard.SetText(_loginCode.Text);
-            _copyButton.Text = L.Copied;
-        };
+        _loginUrl.SetBounds(0, 68, 410, 38);
+        _loginUrl.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _loginUrl.Box.PlaceholderText = L.PastePlaceholder;
+        _loginUrl.Box.TextChanged += async (_, _) => await TokenPastedAsync();
         _loginButton.Text = L.LoginButton;
-        _loginButton.Location = new Point(0, 92);
-        _loginButton.Click += async (_, _) => await LoginAsync();
-        _loginView.Controls.AddRange([_loginText, _loginCode, _copyButton, _loginButton]);
+        _loginButton.Location = new Point(0, 68);
+        _loginButton.Click += (_, _) => StartLogin();
+        _loginView.Controls.AddRange([_loginText, _loginUrl, _loginButton]);
 
         _watchCard.Controls.AddRange([_watchView, _loginView]);
     }
@@ -377,7 +367,12 @@ sealed class MainForm : Form
             SetStatus(L.Offline, Theme.Red);
             _loginText.Text = L.CantReach(ex.Message);
         }
-        if (user is null) ShowLogin();
+        if (user is null)
+        {
+            var hadToken = !string.IsNullOrEmpty(_settings.AccessToken);
+            ShowLogin();
+            if (hadToken) _loginText.Text = L.LoginExpired; // ex. a token of the old login method
+        }
         else StartMiner(user);
     }
 
@@ -405,7 +400,6 @@ sealed class MainForm : Form
         }
         _exiting = true;
         _minerCts?.Cancel();
-        _loginCts?.Cancel();
         _tray.Visible = false;
         base.OnFormClosing(e);
     }
@@ -515,57 +509,61 @@ sealed class MainForm : Form
         SetAccount(null); // NEW
         _watchView.Visible = false;
         _loginView.Visible = true;
-        _loginCode.Text = "";
-        _copyButton.Visible = false;
-        _loginButton.Visible = true;
+        _loginUrl.Visible = false;
+        _loginUrl.Box.Clear();
+        _loginButton.Text = L.LoginButton;
+        _loginButton.Location = new Point(0, 68);
         _loginButton.Enabled = true;
         _user.Text = L.NotLoggedIn;
         _logout.Visible = false;
         SetStatus(L.LoggedOut, Theme.SubText);
     }
 
-    async Task LoginAsync()
+    /// <summary>Opens Twitch's login in the browser; the user pastes the address it ends up on.</summary>
+    void StartLogin()
     {
-        _loginCts?.Cancel();
-        _loginCts = new CancellationTokenSource();
-        var ct = _loginCts.Token;
-        _loginButton.Enabled = false;
+        OpenUrl(TwitchApi.AuthorizeUrl);
+        _loginText.Text = L.PasteUrl;
+        _loginUrl.Visible = true;
+        _loginUrl.Box.Focus();
+        _loginButton.Text = L.OpenAgain;
+        _loginButton.Location = new Point(0, 114);
+    }
+
+    async Task TokenPastedAsync()
+    {
+        var text = _loginUrl.Box.Text.Trim();
+        if (text.Length == 0 || _loggingIn) return;
+        var token = TwitchApi.ParseToken(text);
+        if (token is null)
+        {
+            // typing or pasting half an address: only complain once it looks like a whole one
+            if (text.Length > 40) _loginText.Text = L.NoTokenInUrl;
+            return;
+        }
+        _loggingIn = true;
+        _loginUrl.Enabled = false;
         try
         {
-            var code = await _api.StartDeviceLoginAsync(ct);
-            _loginText.Text = L.EnterCode;
-            _loginCode.Text = code.UserCode;
-            _copyButton.Text = L.Copy;
-            _copyButton.Visible = true;
-            _loginButton.Visible = false;
-            Clipboard.SetText(code.UserCode);
-            OpenUrl(code.VerificationUri.ToString());
-
-            string? token = null;
-            while (token is null && DateTime.UtcNow < code.ExpiresAt)
-            {
-                await Task.Delay(code.Interval, ct);
-                token = await _api.PollDeviceLoginAsync(code, ct);
-            }
-            if (token is null)
-            {
-                ShowLogin();
-                _loginText.Text = L.CodeExpired;
-                return;
-            }
             _api.AccessToken = token;
-            var user = await _api.ValidateAsync(ct) ?? throw new TwitchApiException("Login was not accepted");
+            var user = await _api.ValidateAsync(CancellationToken.None) ?? throw new TwitchApiException("Login was not accepted");
             _settings.AccessToken = token;
             _settings.Save();
+            _loginUrl.Box.Clear(); // the address holds the token
             Log.Info("Logged in");
             StartMiner(user);
         }
-        catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is TwitchApiException or HttpRequestException)
         {
             Log.Error($"Login failed: {ex.Message}");
+            _api.AccessToken = null;
             ShowLogin();
             _loginText.Text = L.LoginFailed(ex.Message);
+        }
+        finally
+        {
+            _loggingIn = false;
+            _loginUrl.Enabled = true;
         }
     }
 

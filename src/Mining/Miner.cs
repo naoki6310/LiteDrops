@@ -113,6 +113,7 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
 
         // discover campaigns through live, drops-enabled channels of the selected games
         var liveGameIds = new HashSet<string>();
+        var liveByGame = new Dictionary<string, List<ChannelRef>>();
         foreach (var (gameName, gameId, slug) in wantedGames)
         {
             var streams = await api.GqlAsync(Gql.DropsStreams(slug, StreamsPerGame), ct);
@@ -123,9 +124,11 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
                     (string)n!["broadcaster"]!["id"]!,
                     (string)n["broadcaster"]!["login"]!,
                     (string?)n["broadcaster"]!["displayName"] ?? (string)n["broadcaster"]!["login"]!,
-                    (int?)n["viewersCount"] ?? 0))
+                    (int?)n["viewersCount"] ?? 0,
+                    (string?)n["id"] ?? ""))
                 .ToList();
             if (channels.Count > 0) liveGameIds.Add(gameId);
+            liveByGame[gameId] = channels;
             foreach (var batch in channels.Chunk(20))
             {
                 var results = await api.GqlBatchAsync(batch.Select(ch => Gql.AvailableDrops(ch.Id)).ToList(), ct);
@@ -133,8 +136,16 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
                 {
                     foreach (var c in results[i]["data"]?["channel"]?["viewerDropCampaigns"] as JsonArray ?? [])
                     {
-                        if ((string?)c?["game"]?["id"] != gameId) continue;
-                        if (c!["timeBasedDrops"] is not JsonArray { Count: > 0 }) continue;
+                        if ((string?)c?["game"]?["id"] != gameId)
+                        {
+                            LogIgnored(gameName, batch[i], c, "belongs to another game");
+                            continue;
+                        }
+                        if (c!["timeBasedDrops"] is not JsonArray { Count: > 0 })
+                        {
+                            LogIgnored(gameName, batch[i], c, "has no watch-time drops");
+                            continue;
+                        }
                         var id = (string)c["id"]!;
                         if (!campaigns.TryGetValue(id, out var campaign))
                         {
@@ -147,6 +158,8 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
                 }
             }
         }
+
+        await AddDashboardCampaignsAsync(campaigns, claimedBenefits, nameById, liveByGame, ct);
 
         await FillCampaignDetailsAsync(campaigns.Values.Where(c => nameById.ContainsKey(c.GameId)), ct);
         _wantedGames = wantedGames;
@@ -172,6 +185,100 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
                 : null;
             if (reason is not null && _loggedSkips.Add(c.Id)) Log.Info($"Skipping {c.GameName} / {c.Name}: {reason}");
         }
+    }
+
+    /// <summary>
+    /// Adds the active campaigns of the selected games from the user's drops page, and gives the
+    /// ones without a channel the live channels they can be earned on. This catches campaigns that
+    /// AvailableDrops doesn't list on any of the channels checked.
+    /// </summary>
+    async Task AddDashboardCampaignsAsync(
+        Dictionary<string, Campaign> campaigns, IReadOnlyDictionary<string, DateTime> claimedBenefits,
+        Dictionary<string, string> nameById, Dictionary<string, List<ChannelRef>> liveByGame, CancellationToken ct)
+    {
+        try
+        {
+            var result = await api.GqlAsync(Gql.DropDashboard(), ct);
+            if (result["data"]?["currentUser"]?["dropCampaigns"] is not JsonArray list)
+            {
+                if (_loggedSkips.Add("dashboard-unavailable"))
+                    Log.Warn($"Drops page unavailable: {(string?)result["errors"]?[0]?["message"] ?? "no data"}");
+                return;
+            }
+            var now = DateTime.UtcNow;
+            if (_loggedSkips.Add($"dashboard-size:{list.Count}"))
+                Log.Info($"Drops page lists {list.Count} campaign(s)");
+            foreach (var c in list)
+            {
+                var gameId = (string?)c?["game"]?["id"];
+                if (c is null || gameId is null || !nameById.TryGetValue(gameId, out var gameName)) continue;
+                if ((string?)c["status"] != "ACTIVE" || Drop.ParseTime(c["endAt"]) <= now)
+                {
+                    if (_loggedSkips.Add("dashboard-inactive:" + c["id"]))
+                        Log.Info($"Drops page: {gameName} / {(string?)c["name"]} is {(string?)c["status"]}, not active");
+                    continue;
+                }
+
+                var id = (string)c["id"]!;
+                var detail = await api.GqlAsync(Gql.CampaignDrops(user.Id, id), ct);
+                var full = detail["data"]?["user"]?["dropCampaign"];
+                if (full?["game"] is null)
+                {
+                    if (_loggedSkips.Add("dashboard-nodetails:" + id))
+                        Log.Warn($"Drops page: no details for {gameName} / {(string?)c["name"]}: " +
+                                 (detail.ToJsonString() is { Length: > 300 } t ? t[..300] : detail.ToJsonString()));
+                    continue;
+                }
+                if (!campaigns.TryGetValue(id, out var campaign))
+                {
+                    if (full["timeBasedDrops"] is not JsonArray { Count: > 0 }) continue;
+                    campaign = ParseCampaign(full, claimedBenefits, inInventory: false, gameName);
+                    campaigns[id] = campaign;
+                }
+                if (campaign.Channels.Count > 0) continue;
+
+                var live = liveByGame.GetValueOrDefault(gameId) ?? [];
+                var allowed = (full["allow"]?["channels"] as JsonArray ?? [])
+                    .Select(a => (string?)a?["id"]).OfType<string>().ToHashSet();
+                if (allowed.Count == 0 || (bool?)full["allow"]?["isEnabled"] == false)
+                {
+                    campaign.Channels.AddRange(live);
+                }
+                else
+                {
+                    campaign.Channels.AddRange(live.Where(ch => allowed.Contains(ch.Id)));
+                    // the channels of an event are often too small to be among the top streams
+                    var missing = allowed.Except(campaign.Channels.Select(ch => ch.Id)).Take(50).ToList();
+                    if (missing.Count > 0)
+                    {
+                        var users = await api.GqlAsync(Gql.LiveChannels(missing), ct);
+                        foreach (var u in users["data"]?["users"] as JsonArray ?? [])
+                        {
+                            if (u?["stream"] is not JsonObject stream || (string?)stream["game"]?["id"] != gameId) continue;
+                            campaign.Channels.Add(new ChannelRef((string)u["id"]!, (string)u["login"]!,
+                                (string?)u["displayName"] ?? (string)u["login"]!,
+                                (int?)stream["viewersCount"] ?? 0, (string?)stream["id"] ?? ""));
+                        }
+                    }
+                }
+                campaign.Channels.Sort((a, b) => b.Viewers.CompareTo(a.Viewers));
+                if (_loggedSkips.Add("dashboard:" + id))
+                    Log.Info($"Drops page: {gameName} / {campaign.Name}, {campaign.Channels.Count} live channel(s)");
+            }
+        }
+        catch (TwitchApiException ex)
+        {
+            Log.Warn($"Drops page unavailable: {ex.Message}");
+        }
+    }
+
+    /// <summary>Says once why a campaign seen on a channel of a selected game isn't taken into account.</summary>
+    void LogIgnored(string gameName, ChannelRef channel, JsonNode? campaign, string reason)
+    {
+        var id = (string?)campaign?["id"] ?? "?";
+        if (!_loggedSkips.Add("ignored:" + id)) return;
+        Log.Info($"Ignoring \"{(string?)campaign?["name"]}\" seen on {channel.Login} ({gameName}): {reason}" +
+                 $" [game {(string?)campaign?["game"]?["name"]} {(string?)campaign?["game"]?["id"]}]");
     }
 
     bool Wanted(Campaign c, DateTime now) => c.CanEarn(now) && (settings.MineBadges || !c.BadgeOrEmoteOnly);
@@ -339,7 +446,7 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
         Log.Info($"Watching {channel.Login} for {campaign.GameName} / {campaign.Name} / {drop.Name}");
         PublishWatching(campaign, channel, drop);
 
-        var watcher = new StreamWatcher(api, channel.Login);
+        var watcher = new StreamWatcher(api, channel, campaign, user.Id);
         var started = DateTime.UtcNow;
         var lastProgressAt = started;
         var nextCheck = started + ProgressCheckInterval;
@@ -445,12 +552,17 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
 
 /// <summary>
 /// Simulates a viewer by periodically fetching the stream's lowest quality playlist and
-/// sending HEAD requests for its new segments, without downloading any video data.
+/// sending HEAD requests for its new segments, without downloading any video data. Like the
+/// web player, it also reports a "minute-watched" event once a minute while the stream plays.
 /// </summary>
-sealed class StreamWatcher(TwitchApi api, string login)
+sealed class StreamWatcher(TwitchApi api, ChannelRef channel, Campaign campaign, string userId)
 {
+    static readonly TimeSpan MinuteWatchedInterval = TimeSpan.FromMinutes(1);
+
     Uri? _playlist;
     readonly Queue<string> _seen = new();
+    DateTime _nextMinuteWatched = DateTime.UtcNow + MinuteWatchedInterval;
+    bool _trackFailing;
 
     public async Task<bool> TickAsync(CancellationToken ct)
     {
@@ -484,6 +596,11 @@ sealed class StreamWatcher(TwitchApi api, string login)
                 _seen.Enqueue(segment);
                 if (_seen.Count > 30) _seen.Dequeue();
             }
+            if (DateTime.UtcNow >= _nextMinuteWatched)
+            {
+                _nextMinuteWatched = DateTime.UtcNow + MinuteWatchedInterval;
+                await SendMinuteWatchedAsync(ct);
+            }
             return true;
         }
         catch (HttpRequestException)
@@ -498,12 +615,43 @@ sealed class StreamWatcher(TwitchApi api, string login)
         }
     }
 
+    /// <summary>Failures are only logged: the segment requests alone still earn progress.</summary>
+    async Task SendMinuteWatchedAsync(CancellationToken ct)
+    {
+        bool ok;
+        try
+        {
+            ok = await api.TrackAsync("minute-watched", MinuteWatchedProperties(), ct);
+        }
+        catch (HttpRequestException) { ok = false; }
+        catch (TaskCanceledException) when (!ct.IsCancellationRequested) { ok = false; }
+        if (!ok && !_trackFailing) Log.Warn($"Twitch did not accept the minute-watched event for {channel.Login}");
+        _trackFailing = !ok;
+    }
+
+    // the fields the web player sends; "site" matches the player type of the playback token
+    JsonObject MinuteWatchedProperties() => new()
+    {
+        ["broadcast_id"] = channel.StreamId,
+        ["channel_id"] = channel.Id,
+        ["channel"] = channel.Login,
+        ["game"] = campaign.GameName,
+        ["game_id"] = campaign.GameId,
+        ["hidden"] = false,
+        ["live"] = true,
+        ["location"] = "channel",
+        ["logged_in"] = true,
+        ["muted"] = false,
+        ["player"] = "site",
+        ["user_id"] = userId,
+    };
+
     async Task<Uri?> GetPlaylistAsync(CancellationToken ct)
     {
-        var result = await api.GqlAsync(Gql.PlaybackAccessToken(login), ct);
+        var result = await api.GqlAsync(Gql.PlaybackAccessToken(channel.Login), ct);
         var token = result["data"]?["streamPlaybackAccessToken"];
         if (token is null) return null;
-        var url = $"https://usher.ttvnw.net/api/channel/hls/{Uri.EscapeDataString(login)}.m3u8" +
+        var url = $"https://usher.ttvnw.net/api/channel/hls/{Uri.EscapeDataString(channel.Login)}.m3u8" +
                   $"?sig={Uri.EscapeDataString((string)token["signature"]!)}" +
                   $"&token={Uri.EscapeDataString((string)token["value"]!)}" +
                   $"&allow_source=true&p={Random.Shared.Next(1_000_000, 9_999_999)}";
