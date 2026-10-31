@@ -10,7 +10,7 @@
     <AssemblyName>LiteDrops</AssemblyName>
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>1.5.1</Version>
+    <Version>1.6.0</Version>
     <Authors>naoki6310</Authors>
     <Copyright>Copyright (c) 2026 naoki6310</Copyright>
     <Product>LiteDrops</Product>
