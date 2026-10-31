@@ -110,8 +110,8 @@ static class L
     public static string MineBadgesDesc => T("Off: only campaigns with in-game items",
         "オフにすると、ゲーム内アイテムがもらえるキャンペーンだけを掘ります");
     public static string DropClaimed => T("Drop claimed", "ドロップを受け取りました");
-    public static string AlreadyRunning => T("LiteDrops is already running (check the system tray).",
-        "LiteDrops はすでに起動しています（タスクトレイを確認してください）。");
+    public static string AlreadyRunning => T("LiteDrops is already running from this folder (check the system tray).",
+    "このフォルダの LiteDrops はすでに起動しています（タスクトレイを確認してください）。");
 
     // miner
     public static string LookingForCampaigns => T("Looking for campaigns…", "キャンペーンを探しています…");

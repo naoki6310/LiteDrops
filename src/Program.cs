@@ -7,7 +7,8 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
-        using var mutex = new Mutex(true, @"Local\LiteDrops.SingleInstance", out var isFirst);
+		// one instance per folder: copies in other folders run side by side
+		using var mutex = new Mutex(true, $@"Local\LiteDrops.{InstanceId.Folder}", out var isFirst);
         if (!isFirst && args.Contains("--restart"))
         {
             // restarted after a language change: wait for the previous instance to exit

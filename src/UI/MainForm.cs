@@ -72,6 +72,7 @@ sealed class MainForm : Form
     bool _exiting;
     bool _started;
     DateTime _lastTrim;
+    string? _account; // NEW: login of the account in use, shown in the title and the tray tooltip
 
     public MainForm(AppSettings settings, bool startHidden)
     {
@@ -505,6 +506,7 @@ sealed class MainForm : Form
 
     void ShowLogin()
     {
+        SetAccount(null); // NEW
         _watchView.Visible = false;
         _loginView.Visible = true;
         _loginUrl.Visible = false;
@@ -583,6 +585,7 @@ sealed class MainForm : Form
 
     void StartMiner(TwitchUser user)
     {
+        SetAccount(user.Login); // NEW
         _loginView.Visible = false;
         _watchView.Visible = true;
         _user.Text = L.LoggedInAs(user.Login);
@@ -605,7 +608,8 @@ sealed class MainForm : Form
             {
                 _history.Add(game, campaign, drop);
                 OwnedForms.OfType<HistoryDialog>().FirstOrDefault()?.Refresh(_history);
-                _tray.ShowBalloonTip(5000, L.DropClaimed, $"{game} — {drop}", ToolTipIcon.Info);
+                // CHANGED (optional): the account in the balloon title tells copies apart
+                _tray.ShowBalloonTip(5000, $"{L.DropClaimed} · {_account}", $"{game} — {drop}", ToolTipIcon.Info);
             });
         };
         _ = Task.Run(async () =>
@@ -652,10 +656,27 @@ sealed class MainForm : Form
         _campaignList.EndUpdate();
         UpdateCampaignEmpty();
 
-        var tip = snapshot.Watching is { } w
-            ? $"LiteDrops — {w.GameName} {L.Minutes(w.CurrentMinutes, w.RequiredMinutes)}"
-            : $"LiteDrops — {snapshot.StatusText}";
-        _tray.Text = tip.Length > 63 ? tip[..63] : tip;
+        // CHANGED: the tooltip starts with the account name
+        var detail = snapshot.Watching is { } w
+            ? $"{w.GameName} {L.Minutes(w.CurrentMinutes, w.RequiredMinutes)}"
+            : snapshot.StatusText;
+        SetTrayText(detail);
+    }
+
+    // NEW: account name in the window title and the tray tooltip ("LiteDrops · login")
+    string AppTitle => _account is null ? "LiteDrops" : $"LiteDrops · {_account}";
+
+    void SetAccount(string? login)
+    {
+        _account = login;
+        Text = AppTitle;
+        SetTrayText(null);
+    }
+
+    void SetTrayText(string? detail)
+    {
+        var tip = detail is null ? AppTitle : $"{AppTitle} — {detail}";
+        _tray.Text = tip.Length > 127 ? tip[..127] : tip; // NotifyIcon limit in .NET Core+
     }
 
     void ShowWatching(WatchInfo? w, string? idleText = null)
@@ -877,11 +898,12 @@ sealed class MainForm : Form
     }
 }
 
-/// <summary>"Start with Windows" via the per-user Run key.</summary>
+/// <summary>"Start with Windows" via the per-user Run key, one entry per folder.</summary>
 static class AutoStart
 {
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    const string Name = "LiteDrops";
+    const string LegacyName = "LiteDrops"; // CHANGED: the old entry shared by every copy
+    static string Name => $"LiteDrops-{InstanceId.Folder}"; // NEW: one entry per folder
     static string Command => $"\"{Environment.ProcessPath}\" --tray";
 
     public static bool IsEnabled
@@ -889,14 +911,31 @@ static class AutoStart
         get
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-            return key?.GetValue(Name) as string == Command;
+            return key?.GetValue(Name) as string == Command
+                   || key?.GetValue(LegacyName) as string == Command;
         }
     }
 
     public static void Set(bool enabled)
     {
         using var key = Registry.CurrentUser.CreateSubKey(RunKey);
+        RemoveStale(key);
+        // migrate the old shared entry, but only if it belongs to this copy
+        if (key.GetValue(LegacyName) as string == Command) key.DeleteValue(LegacyName, throwOnMissingValue: false);
         if (enabled) key.SetValue(Name, Command);
         else key.DeleteValue(Name, throwOnMissingValue: false);
+    }
+
+    /// <summary>Deletes entries of copies that were moved or deleted (their exe is gone).</summary>
+    static void RemoveStale(RegistryKey key)
+    {
+        foreach (var name in key.GetValueNames())
+        {
+            if (!name.StartsWith("LiteDrops-", StringComparison.Ordinal)) continue;
+            // the command is: "C:\path\LiteDrops.exe" --tray
+            if (key.GetValue(name) is string { } command && command.Split('"') is [_, var exe, ..]
+                && !File.Exists(exe))
+                key.DeleteValue(name, throwOnMissingValue: false);
+        }
     }
 }

@@ -16,6 +16,7 @@
 - **ゲーム検索**：ゲーム名を入力すると Twitch 上の正式名が候補に出るので、選ぶだけで追加できます
 - **日本語 / 英語 UI**：Windows の表示言語に合わせて自動で切り替わります（⚙ 設定から変更も可）
 - **Windows 起動時に開始**：⚙ 設定でオンにすると、PC の起動時にトレイに入った状態で採掘を始めます
+- **複数アカウントを同時に**：`LiteDrops.exe` を別々のフォルダに置けば、コピーごとに別の Twitch アカウントで同時に動かせます。ウィンドウのタイトルとトレイアイコンのホバー表示に、ログイン中のアカウント名が出ます
 - **アイテム優先**：ゲーム内アイテムがもらえるキャンペーンを、チャットバッジ・エモートだけのものより先に掘ります（⚙ 設定でバッジ・エモートを除外することも可）
 - **アカウント連携チェック**：ゲームアカウントが未連携のキャンペーンは飛ばし、「アカウント連携 ›」から連携ページを開けます
 - **自動で受け取り**：完了したドロップは自動で受け取ります（Claim）。受け取ったものは「履歴」で一覧できます
@@ -48,12 +49,14 @@
 - 視聴中のチャンネル名をクリックすると、その配信をブラウザで開きます
 - 右上の ⚙ から設定を開けます（Windows 起動時に開始・閉じたらトレイに格納・バッジ・エモートも掘る・言語）
 - ウィンドウを閉じるとトレイに格納されます。終了するときは、トレイアイコンを右クリックして「終了」を選びます
-- 設定（`litedrops.json`）・受け取り履歴（`litedrops-history.json`）・ログ（`litedrops.log`）は exe と同じフォルダに作られます
+- 設定（`litedrops.json`）・受け取り履歴（`litedrops-history.json`）・ログ（`litedrops.log`）は exe と同じフォルダに作られます（コピーごとに別々です）
+- 複数のアカウントで掘るには、フォルダを分けて `LiteDrops.exe` をコピーし、それぞれ別のアカウントでログインします。同じフォルダの exe は 1 つしか起動できません。「Windows 起動時に開始」もコピーごとに設定できます
 
 ### 注意
 - キャンペーンは、Drops が有効な配信中のチャンネルを探して見つけます。配信者がいないキャンペーンは見つかりません
 - 報酬を受け取るには、事前にゲームのアカウントを Twitch と連携しておいてください
 - 本ソフトは Twitch 非公式です。自動視聴は Twitch の利用規約に抵触する可能性があります。**自己責任で**使ってください
+- 同じ Twitch アカウントを複数のコピーでログインしないでください（同じドロップの進行を取り合います）
 
 ---
 
@@ -66,24 +69,27 @@
 - **Game search**: type a name and pick Twitch's exact spelling from the suggestions
 - **English / Japanese UI**, following the Windows display language (changeable in ⚙ Settings)
 - **Start with Windows** option in ⚙ Settings (starts minimized to the tray)
+- **Several accounts at once**: put `LiteDrops.exe` in separate folders and run each copy with its own Twitch account. The window title and the tray icon tooltip show the logged-in account
 - **Items first**: campaigns with in-game rewards are mined before chat badge / emote only ones (which can be turned off in ⚙ Settings)
 - **Account link check**: campaigns whose game account isn't linked are skipped, with a "Link account ›" shortcut
 - **Auto-claim** of finished drops, with a claim **History**
 - **Back to your top game quickly**: switches within ~10 minutes when a higher-priority game goes live
 - **Update notice** at the bottom when a new version is out (checks GitHub twice a day)
 - **No video download**: only stream playlists are fetched, so bandwidth use is minimal
-- **Encrypted login**: the token is protected with Windows DPAPI
+- **Encrypted login**: the token is protected with Windows DPAPI, so it can't be used on another PC or by another Windows user
 
 ### Requirements
 - Windows 10 / 11 (x64)
 
 ### Download
-Get one of these from [Releases](../../releases):
+Download one of these from [Releases](../../releases).
 
-- `LiteDrops-standalone-win-x64.zip` (~42 MB) — **recommended**, no install needed: unzip and run `LiteDrops.exe`
-- `LiteDrops.exe` (~0.5 MB) — for PCs with the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) (you're prompted to install it if missing)
+| File | Size | Description |
+|---|---|---|
+| `LiteDrops-standalone-win-x64.zip` | ~42 MB | **If you're unsure, pick this one.** Unzip it and run the extracted `LiteDrops.exe` as is |
+| `LiteDrops.exe` | ~0.5 MB | For PCs that have the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). If it's missing, you're prompted to install it at launch |
 
-Both behave the same and use about the same memory.
+Both contain the same app and behave the same, and their memory use is about the same.
 
 ### Usage
 1. Put `LiteDrops.exe` in any folder and run it
