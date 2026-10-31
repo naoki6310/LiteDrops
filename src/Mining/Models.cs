@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 
 namespace LiteDrops.Mining;
 
-public sealed record ChannelRef(string Id, string Login, string DisplayName, int Viewers);
+public sealed record ChannelRef(string Id, string Login, string DisplayName, int Viewers, string StreamId);
 
 public sealed class Drop
 {
