@@ -87,13 +87,13 @@ Both behave the same and use about the same memory.
 
 ### Usage
 1. Put `LiteDrops.exe` in any folder and run it
-2. Click **Log in with Twitch**, then enter the shown code on the Twitch activation page
+2. Click **Log in with Twitch**, log in in the browser that opens, then paste the address it ends up on (it contains `#access_token=`) into LiteDrops
 3. Add games with the search box (pick a suggestion), then leave it running
 
 Drag rows to change the priority (top = first). Keyboard: Alt+↑/↓ to move, Delete to remove, Space to toggle. Click the channel name to open the stream. The ⚙ button opens the settings (start with Windows, close to tray, badges & emotes, language). Closing the window keeps LiteDrops in the tray; use **Exit** from the tray menu to quit.
 
 ### Notes
-- Campaigns are discovered through live, drops-enabled channels of your games
+- Campaigns are discovered through your Twitch drops page and through live, drops-enabled channels of your games
 - Link your game accounts on Twitch beforehand, or the rewards can't be claimed
 - Not affiliated with Twitch. Automated viewing may be against Twitch's Terms of Service — use at your own risk
 

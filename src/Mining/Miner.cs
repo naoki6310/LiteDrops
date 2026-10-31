@@ -113,6 +113,7 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
 
         // discover campaigns through live, drops-enabled channels of the selected games
         var liveGameIds = new HashSet<string>();
+        var liveByGame = new Dictionary<string, List<ChannelRef>>();
         foreach (var (gameName, gameId, slug) in wantedGames)
         {
             var streams = await api.GqlAsync(Gql.DropsStreams(slug, StreamsPerGame), ct);
@@ -127,6 +128,7 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
                     (string?)n["id"] ?? ""))
                 .ToList();
             if (channels.Count > 0) liveGameIds.Add(gameId);
+            liveByGame[gameId] = channels;
             foreach (var batch in channels.Chunk(20))
             {
                 var results = await api.GqlBatchAsync(batch.Select(ch => Gql.AvailableDrops(ch.Id)).ToList(), ct);
@@ -134,8 +136,16 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
                 {
                     foreach (var c in results[i]["data"]?["channel"]?["viewerDropCampaigns"] as JsonArray ?? [])
                     {
-                        if ((string?)c?["game"]?["id"] != gameId) continue;
-                        if (c!["timeBasedDrops"] is not JsonArray { Count: > 0 }) continue;
+                        if ((string?)c?["game"]?["id"] != gameId)
+                        {
+                            LogIgnored(gameName, batch[i], c, "belongs to another game");
+                            continue;
+                        }
+                        if (c!["timeBasedDrops"] is not JsonArray { Count: > 0 })
+                        {
+                            LogIgnored(gameName, batch[i], c, "has no watch-time drops");
+                            continue;
+                        }
                         var id = (string)c["id"]!;
                         if (!campaigns.TryGetValue(id, out var campaign))
                         {
@@ -148,6 +158,8 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
                 }
             }
         }
+
+        await AddDashboardCampaignsAsync(campaigns, claimedBenefits, nameById, liveByGame, ct);
 
         await FillCampaignDetailsAsync(campaigns.Values.Where(c => nameById.ContainsKey(c.GameId)), ct);
         _wantedGames = wantedGames;
@@ -173,6 +185,100 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
                 : null;
             if (reason is not null && _loggedSkips.Add(c.Id)) Log.Info($"Skipping {c.GameName} / {c.Name}: {reason}");
         }
+    }
+
+    /// <summary>
+    /// Adds the active campaigns of the selected games from the user's drops page, and gives the
+    /// ones without a channel the live channels they can be earned on. This catches campaigns that
+    /// AvailableDrops doesn't list on any of the channels checked.
+    /// </summary>
+    async Task AddDashboardCampaignsAsync(
+        Dictionary<string, Campaign> campaigns, IReadOnlyDictionary<string, DateTime> claimedBenefits,
+        Dictionary<string, string> nameById, Dictionary<string, List<ChannelRef>> liveByGame, CancellationToken ct)
+    {
+        try
+        {
+            var result = await api.GqlAsync(Gql.DropDashboard(), ct);
+            if (result["data"]?["currentUser"]?["dropCampaigns"] is not JsonArray list)
+            {
+                if (_loggedSkips.Add("dashboard-unavailable"))
+                    Log.Warn($"Drops page unavailable: {(string?)result["errors"]?[0]?["message"] ?? "no data"}");
+                return;
+            }
+            var now = DateTime.UtcNow;
+            if (_loggedSkips.Add($"dashboard-size:{list.Count}"))
+                Log.Info($"Drops page lists {list.Count} campaign(s)");
+            foreach (var c in list)
+            {
+                var gameId = (string?)c?["game"]?["id"];
+                if (c is null || gameId is null || !nameById.TryGetValue(gameId, out var gameName)) continue;
+                if ((string?)c["status"] != "ACTIVE" || Drop.ParseTime(c["endAt"]) <= now)
+                {
+                    if (_loggedSkips.Add("dashboard-inactive:" + c["id"]))
+                        Log.Info($"Drops page: {gameName} / {(string?)c["name"]} is {(string?)c["status"]}, not active");
+                    continue;
+                }
+
+                var id = (string)c["id"]!;
+                var detail = await api.GqlAsync(Gql.CampaignDrops(user.Id, id), ct);
+                var full = detail["data"]?["user"]?["dropCampaign"];
+                if (full?["game"] is null)
+                {
+                    if (_loggedSkips.Add("dashboard-nodetails:" + id))
+                        Log.Warn($"Drops page: no details for {gameName} / {(string?)c["name"]}: " +
+                                 (detail.ToJsonString() is { Length: > 300 } t ? t[..300] : detail.ToJsonString()));
+                    continue;
+                }
+                if (!campaigns.TryGetValue(id, out var campaign))
+                {
+                    if (full["timeBasedDrops"] is not JsonArray { Count: > 0 }) continue;
+                    campaign = ParseCampaign(full, claimedBenefits, inInventory: false, gameName);
+                    campaigns[id] = campaign;
+                }
+                if (campaign.Channels.Count > 0) continue;
+
+                var live = liveByGame.GetValueOrDefault(gameId) ?? [];
+                var allowed = (full["allow"]?["channels"] as JsonArray ?? [])
+                    .Select(a => (string?)a?["id"]).OfType<string>().ToHashSet();
+                if (allowed.Count == 0 || (bool?)full["allow"]?["isEnabled"] == false)
+                {
+                    campaign.Channels.AddRange(live);
+                }
+                else
+                {
+                    campaign.Channels.AddRange(live.Where(ch => allowed.Contains(ch.Id)));
+                    // the channels of an event are often too small to be among the top streams
+                    var missing = allowed.Except(campaign.Channels.Select(ch => ch.Id)).Take(50).ToList();
+                    if (missing.Count > 0)
+                    {
+                        var users = await api.GqlAsync(Gql.LiveChannels(missing), ct);
+                        foreach (var u in users["data"]?["users"] as JsonArray ?? [])
+                        {
+                            if (u?["stream"] is not JsonObject stream || (string?)stream["game"]?["id"] != gameId) continue;
+                            campaign.Channels.Add(new ChannelRef((string)u["id"]!, (string)u["login"]!,
+                                (string?)u["displayName"] ?? (string)u["login"]!,
+                                (int?)stream["viewersCount"] ?? 0, (string?)stream["id"] ?? ""));
+                        }
+                    }
+                }
+                campaign.Channels.Sort((a, b) => b.Viewers.CompareTo(a.Viewers));
+                if (_loggedSkips.Add("dashboard:" + id))
+                    Log.Info($"Drops page: {gameName} / {campaign.Name}, {campaign.Channels.Count} live channel(s)");
+            }
+        }
+        catch (TwitchApiException ex)
+        {
+            Log.Warn($"Drops page unavailable: {ex.Message}");
+        }
+    }
+
+    /// <summary>Says once why a campaign seen on a channel of a selected game isn't taken into account.</summary>
+    void LogIgnored(string gameName, ChannelRef channel, JsonNode? campaign, string reason)
+    {
+        var id = (string?)campaign?["id"] ?? "?";
+        if (!_loggedSkips.Add("ignored:" + id)) return;
+        Log.Info($"Ignoring \"{(string?)campaign?["name"]}\" seen on {channel.Login} ({gameName}): {reason}" +
+                 $" [game {(string?)campaign?["game"]?["name"]} {(string?)campaign?["game"]?["id"]}]");
     }
 
     bool Wanted(Campaign c, DateTime now) => c.CanEarn(now) && (settings.MineBadges || !c.BadgeOrEmoteOnly);

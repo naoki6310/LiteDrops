@@ -74,6 +74,25 @@ public static class Gql
         ["variables"] = new JsonObject { ["channelID"] = channelId },
     };
 
+    /// <summary>
+    /// Every campaign of the user's drops page. Unlike AvailableDrops it doesn't depend on Twitch
+    /// listing the campaign on the channels checked. Only the Android app client gets data from it.
+    /// </summary>
+    public static JsonObject DropDashboard() => Persisted(
+        "ViewerDropsDashboard", "c16bb890cc8ce7647a96ee69cd313d423a378a3dedadf630a1017cde18975feb",
+        new() { ["fetchRewardCampaigns"] = false });
+
+    /// <summary>The drops of one campaign and the channels it is limited to.</summary>
+    public static JsonObject CampaignDrops(string userId, string campaignId) => Persisted(
+        "DropCampaignDetails", "039277bf98f3130929262cc7c6efd9c141ca3749cb6dca442fc8ead9a53f77c1",
+        new() { ["channelLogin"] = userId, ["dropID"] = campaignId });
+
+    public static JsonObject LiveChannels(IEnumerable<string> channelIds) => new()
+    {
+        ["query"] = "query($ids: [ID!]!) { users(ids: $ids) { id login displayName stream { id viewersCount game { id } } } }",
+        ["variables"] = new JsonObject { ["ids"] = new JsonArray(channelIds.Select(i => (JsonNode)i).ToArray()) },
+    };
+
     public static JsonObject PlaybackAccessToken(string login) => Persisted(
         "PlaybackAccessToken", "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9",
         new()

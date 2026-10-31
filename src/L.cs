@@ -53,11 +53,14 @@ static class L
     // login
     public static string LoginPrompt => T("Log in with your Twitch account to start mining.", "Twitch アカウントでログインすると採掘を始めます。");
     public static string LoginButton => T("Log in with Twitch", "Twitch でログイン");
-    public static string EnterCode => T("Enter this code at twitch.tv/activate (opened in your browser), then confirm:",
-        "ブラウザで開いた twitch.tv/activate に次のコードを入力して、許可してください：");
-    public static string Copy => T("Copy", "コピー");
-    public static string Copied => T("Copied", "コピー済み");
-    public static string CodeExpired => T("The code expired. Please try again.", "コードの有効期限が切れました。もう一度お試しください。");
+    public static string PasteUrl => T(
+        "Log in in the browser that just opened. When the page has loaded, copy the address from the address bar (it contains #access_token=) and paste it here:",
+        "開いたブラウザでログインしてください。読み込みが終わったら、アドレスバーのURL（#access_token= を含むもの）をコピーして、ここに貼り付けてください：");
+    public static string PastePlaceholder => T("Paste the address here", "ここにURLを貼り付け");
+    public static string OpenAgain => T("Open the page again", "もう一度開く");
+    public static string NoTokenInUrl => T(
+        "That address has no login token. After logging in, copy the whole address of the page.",
+        "このURLにはログイン情報が含まれていません。ログイン後のページのアドレス全体をコピーしてください。");
     public static string LoginFailed(string reason) => T($"Login failed: {reason}", $"ログインに失敗しました：{reason}");
     public static string LoginExpired => T("Your login expired. Please log in again.", "ログインの有効期限が切れました。もう一度ログインしてください。");
     public static string CantReach(string reason) => T($"Can't reach Twitch: {reason}", $"Twitch に接続できません：{reason}");

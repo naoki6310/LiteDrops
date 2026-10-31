@@ -28,6 +28,31 @@ public class HelperTests
         Assert.Equal("PUBG: BATTLEGROUNDS", record!.Game);
     }
 
+    [Theory]
+    [InlineData("https://www.twitch.tv/#access_token=abc123def456ghi789jkl012mno345&scope=&token_type=bearer", "abc123def456ghi789jkl012mno345")]
+    [InlineData("  https://www.twitch.tv/?x=1#ACCESS_TOKEN=Zz9Yy8Xx7  ", "Zz9Yy8Xx7")]
+    [InlineData("abcdefghij0123456789abcdefghij", "abcdefghij0123456789abcdefghij")]
+    [InlineData("https://www.twitch.tv/", null)]
+    [InlineData("", null)]
+    public void Token_is_read_from_the_pasted_address(string pasted, string? expected) =>
+        Assert.Equal(expected, Twitch.TwitchApi.ParseToken(pasted));
+
+    [Fact]
+    public void Client_can_be_created_with_the_app_user_agent()
+    {
+        using var api = new Twitch.TwitchApi("device");
+        Assert.StartsWith("Dalvik/", string.Join(" ", api.Http.DefaultRequestHeaders.GetValues("User-Agent")));
+    }
+
+    [Fact]
+    public void Authorize_url_uses_the_redirect_the_app_client_accepts()
+    {
+        var url = new Uri(Twitch.TwitchApi.AuthorizeUrl);
+        Assert.Equal("id.twitch.tv", url.Host);
+        Assert.Contains("response_type=token", url.Query);
+        Assert.Contains("redirect_uri=https%3A%2F%2Fwww.twitch.tv%2F", url.Query);
+    }
+
     [Fact]
     public void Spade_events_are_a_base64_json_array()
     {
