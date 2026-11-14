@@ -275,6 +275,8 @@ public sealed class Miner(TwitchApi api, AppSettings settings, TwitchUser user)
     /// <summary>Says once why a campaign seen on a channel of a selected game isn't taken into account.</summary>
     void LogIgnored(string gameName, ChannelRef channel, JsonNode? campaign, string reason)
     {
+        // streamers' own sub / channel reward campaigns have no game and come and go all day
+        if (string.IsNullOrEmpty((string?)campaign?["game"]?["id"])) return;
         var id = (string?)campaign?["id"] ?? "?";
         if (!_loggedSkips.Add("ignored:" + id)) return;
         Log.Info($"Ignoring \"{(string?)campaign?["name"]}\" seen on {channel.Login} ({gameName}): {reason}" +
